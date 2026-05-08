@@ -70,7 +70,8 @@ def train(args):
             loss_seq = criterion_seq(seq_logits.float(), y_seq)
             loss_param = criterion_params(params_pred.float(), y_params_scaled.float())
             
-            loss = loss_seq + 0.1 * loss_param # Weighting factor
+            # High weighting for physical parameters to force regression convergence
+            loss = loss_seq + 5.0 * loss_param 
                 
             # Backward Pass (No scaler needed for bfloat16!)
             loss.backward()
@@ -105,7 +106,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_samples", type=int, default=100000)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--num_workers", type=int, default=32)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=50) # Increased default epochs
     parser.add_argument("--lr", type=float, default=1e-4) # Lowered LR to stabilize training
     parser.add_argument("--save_dir", type=str, default="checkpoints")
     
