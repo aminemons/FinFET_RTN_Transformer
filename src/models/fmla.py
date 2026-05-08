@@ -48,7 +48,7 @@ class FMLA(nn.Module):
         # Normalization term (denominator)
         normalizer = torch.einsum('bhnd,bhd->bhn', Q_prime, K_prime.sum(dim=2)).unsqueeze(-1)
         
-        Z = Z / (normalizer + 1e-6)
+        Z = Z / (normalizer + 1e-4)
         
         # Cast back to original dtype (e.g. FP16 inside autocast)
         Z = Z.to(Q.dtype)

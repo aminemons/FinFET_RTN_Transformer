@@ -22,7 +22,9 @@ class StatisticalMomentExtractor(nn.Module):
         mean = windows.mean(dim=-1)
         
         # Calculate Std
-        std = windows.std(dim=-1, unbiased=True) + 1e-8
+        # Use 1e-4 because 1e-8 rounds to EXACTLY 0.0 in float16!
+        # If a window is entirely 0s or 1s, std is 0, causing division by zero (NaN).
+        std = windows.std(dim=-1, unbiased=True) + 1e-4
         
         # Calculate Skewness
         # (E[(X - mu)^3] / sigma^3)
