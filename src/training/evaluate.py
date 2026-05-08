@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import os
 import argparse
 from src.data.generator import RTNGenerator
-from src.data.dataset import RTNDataset
+from src.data.dataset import FinFETRTNDataset
 from src.models.transformer import RTNDualHeadTransformer
 from torch.utils.data import DataLoader
 
@@ -13,7 +13,9 @@ def evaluate(checkpoint_path, save_dir, num_samples=5, seq_length=1024):
     
     # 1. Initialize Generator and DataLoader
     generator = RTNGenerator(seq_length=seq_length)
-    dataset = RTNDataset(generator, num_samples=num_samples)
+    # Generate data
+    data_list = generator.generate_batch_multiprocess(num_samples, num_workers=min(num_samples, 32))
+    dataset = FinFETRTNDataset(data_list)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
     
     # 2. Initialize Model
