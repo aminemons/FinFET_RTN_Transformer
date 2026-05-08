@@ -28,10 +28,12 @@ class StatisticalMomentExtractor(nn.Module):
         # (E[(X - mu)^3] / sigma^3)
         diff = windows - mean.unsqueeze(-1)
         skewness = (diff ** 3).mean(dim=-1) / (std ** 3)
+        skewness = torch.clamp(skewness, -50.0, 50.0) # Prevent FP16 explosion
         
         # Calculate Kurtosis
         # (E[(X - mu)^4] / sigma^4)
         kurtosis = (diff ** 4).mean(dim=-1) / (std ** 4)
+        kurtosis = torch.clamp(kurtosis, -50.0, 50.0) # Prevent FP16 explosion
         
         # Stack features: [Batch, Channels, NumWindows, FeatureDim]
         features = torch.stack([mean, std, skewness, kurtosis], dim=-1)

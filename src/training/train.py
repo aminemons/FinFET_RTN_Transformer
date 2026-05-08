@@ -67,12 +67,11 @@ def train(args):
                 # Reshape logits for CrossEntropy: [Batch, Channels, SeqLen]
                 seq_logits = seq_logits.transpose(1, 2)
                 
-                loss_seq = criterion_seq(seq_logits, y_seq)
-                
-                # Compare model output directly to scaled targets
-                loss_param = criterion_params(params_pred, y_params_scaled)
-                
-                loss = loss_seq + 0.1 * loss_param # Weighting factor
+            # Cast to float32 before computing loss to prevent FP16 squaring overflow!
+            loss_seq = criterion_seq(seq_logits.float(), y_seq)
+            loss_param = criterion_params(params_pred.float(), y_params_scaled.float())
+            
+            loss = loss_seq + 0.1 * loss_param # Weighting factor
                 
             # AMP Backward Pass
             scaler.scale(loss).backward()
