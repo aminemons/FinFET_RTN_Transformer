@@ -75,6 +75,11 @@ def train(args):
                 
             # AMP Backward Pass
             scaler.scale(loss).backward()
+            
+            # Unscale gradients and clip them to prevent exploding gradients (NaNs)
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             scaler.step(optimizer)
             scaler.update()
             
@@ -104,7 +109,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--num_workers", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=1e-4) # Lowered LR to stabilize training
     parser.add_argument("--save_dir", type=str, default="checkpoints")
     
     args = parser.parse_args()
