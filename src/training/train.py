@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 import os
 import argparse
 from src.data.generator import RTNGenerator
@@ -31,13 +31,12 @@ def train(args):
     ).to(device)
     
     # RTX A5000 Graph Compilation
-    # PyTorch 2.x feature for extreme speedup
     print("Compiling model graph via torch.compile()...")
     model = torch.compile(model)
     
     # 3. Optimizers & Scaler for Mixed Precision
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    scaler = GradScaler()
+    scaler = GradScaler("cuda")
     
     # Loss functions
     criterion_seq = nn.CrossEntropyLoss()
@@ -55,12 +54,14 @@ def train(args):
         for batch_idx, (x, y_seq, y_params) in enumerate(dataloader):
             x = x.to(device)
             y_seq = y_seq.to(device)
-            y_params = y_params.to(device)
+            
+            # Scale physical parameters to O(1) BEFORE autocast to prevent FP16 overflow
+            y_params_scaled = (y_params * 1e7).to(device)
             
             optimizer.zero_grad(set_to_none=True)
             
             # AMP Forward Pass
-            with autocast():
+            with autocast("cuda"):
                 seq_logits, params_pred = model(x)
                 
                 # Reshape logits for CrossEntropy: [Batch, Channels, SeqLen]
@@ -68,9 +69,8 @@ def train(args):
                 
                 loss_seq = criterion_seq(seq_logits, y_seq)
                 
-                # Parameter scaling (log scale might be better, but standard MSE for now)
-                # Note: tau_c and tau_e are small (1e-7), so scale them up for stable gradients
-                loss_param = criterion_params(params_pred * 1e7, y_params * 1e7)
+                # Compare model output directly to scaled targets
+                loss_param = criterion_params(params_pred, y_params_scaled)
                 
                 loss = loss_seq + 0.1 * loss_param # Weighting factor
                 
