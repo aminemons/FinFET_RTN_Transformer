@@ -59,23 +59,29 @@ def evaluate(checkpoint_path, save_dir, num_samples=5, seq_length=1024):
             true_seq = y_seq.squeeze().cpu().numpy()
             
             # Plotting
-            fig, axs = plt.subplots(4, 1, figsize=(12, 10))
+            fig, axs = plt.subplots(4, 1, figsize=(12, 12))
             
-            # 1. Ground Truth Binary Sequence
-            axs[0].plot(true_seq, color='green', label='True Binary State (Unobservable)')
-            axs[0].set_title("Ground Truth RTN State Transitions")
+            # 1. Comparison Overlay (The "Filtered" View)
+            axs[0].plot(noisy_signal, color='gray', alpha=0.5, label='Raw Noisy Input')
+            axs[0].plot(pred_seq, color='red', linewidth=2, label='Transformer Filtered Output')
+            axs[0].set_title("Real-Time Denoising Comparison (Overlay)")
             axs[0].legend(loc="upper right")
             axs[0].grid(True, alpha=0.3)
             
-            # 2. Noisy RC-Filtered Input Signal
-            axs[1].plot(noisy_signal, color='gray', label='Noisy RC-Filtered Measurement (Model Input)')
-            axs[1].set_title("Hardware Measurement Simulation")
+            # 2. Model Confidence (Soft Probability)
+            # Plot the probability of state 1
+            prob_state_1 = probs.squeeze()[:, 1].cpu().numpy()
+            axs[1].fill_between(range(seq_length), prob_state_1, color='blue', alpha=0.3, label='Model Confidence (State 1)')
+            axs[1].plot(prob_state_1, color='blue', linewidth=1)
+            axs[1].set_ylim([-0.1, 1.1])
+            axs[1].set_title("Transformer Posterior Probability (Soft Decisions)")
             axs[1].legend(loc="upper right")
             axs[1].grid(True, alpha=0.3)
             
-            # 3. Model Prediction
-            axs[2].plot(pred_seq, color='blue', label='Transformer Denoised Output')
-            axs[2].set_title("Transformer Sequence Reconstruction")
+            # 3. Ground Truth vs Prediction
+            axs[2].plot(true_seq, color='green', label='True Physical State', alpha=0.7)
+            axs[2].plot(pred_seq, color='red', linestyle='--', label='AI Denoised State')
+            axs[2].set_title("State Recovery Accuracy")
             axs[2].legend(loc="upper right")
             axs[2].grid(True, alpha=0.3)
             
