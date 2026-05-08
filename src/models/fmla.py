@@ -32,13 +32,15 @@ class FMLA(nn.Module):
         K = self.k_proj(k).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         V = self.v_proj(v).view(batch_size, seq_len, self.n_heads, self.head_dim).transpose(1, 2)
         
-        # Apply non-linear feature map
-        Q_prime = self.phi(Q)
-        K_prime = self.phi(K)
+        # Apply non-linear feature map and cast to FP32 to prevent FP16 summation overflow!
+        # Summing 1024 elements in FP16 easily exceeds the 65,504 limit if values average > 8.0.
+        Q_prime = self.phi(Q).float()
+        K_prime = self.phi(K).float()
+        V_fp32 = V.float()
         
         # Linear Attention Core: O(N) instead of O(N^2)
         # 1. Compute Key-Value matrix: [Batch, Heads, HeadDim, HeadDim]
-        KV = torch.einsum('bhnd,bhne->bhde', K_prime, V)
+        KV = torch.einsum('bhnd,bhne->bhde', K_prime, V_fp32)
         
         # 2. Multiply Query by KV matrix: [Batch, Heads, SeqLen, HeadDim]
         Z = torch.einsum('bhnd,bhde->bhne', Q_prime, KV)
@@ -47,6 +49,9 @@ class FMLA(nn.Module):
         normalizer = torch.einsum('bhnd,bhd->bhn', Q_prime, K_prime.sum(dim=2)).unsqueeze(-1)
         
         Z = Z / (normalizer + 1e-6)
+        
+        # Cast back to original dtype (e.g. FP16 inside autocast)
+        Z = Z.to(Q.dtype)
         
         # Reshape back to [Batch, SeqLen, d_model]
         Z = Z.transpose(1, 2).contiguous().view(batch_size, seq_len, self.d_model)
