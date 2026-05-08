@@ -34,9 +34,8 @@ def train(args):
     print("Compiling model graph via torch.compile()...")
     model = torch.compile(model)
     
-    # 3. Optimizers & Scaler for Mixed Precision
+    # 3. Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    scaler = GradScaler("cuda")
     
     # Loss functions
     criterion_seq = nn.CrossEntropyLoss()
@@ -55,33 +54,31 @@ def train(args):
             x = x.to(device)
             y_seq = y_seq.to(device)
             
-            # Scale physical parameters to O(1) BEFORE autocast to prevent FP16 overflow
+            # Scale physical parameters to O(1)
             y_params_scaled = (y_params * 1e7).to(device)
             
             optimizer.zero_grad(set_to_none=True)
             
-            # AMP Forward Pass
-            with autocast("cuda"):
+            # bfloat16 Forward Pass (Native Ampere feature, completely immune to 65,504 overflow!)
+            with autocast("cuda", dtype=torch.bfloat16):
                 seq_logits, params_pred = model(x)
                 
                 # Reshape logits for CrossEntropy: [Batch, Channels, SeqLen]
                 seq_logits = seq_logits.transpose(1, 2)
                 
-            # Cast to float32 before computing loss to prevent FP16 squaring overflow!
+            # Cast to float32 before computing loss
             loss_seq = criterion_seq(seq_logits.float(), y_seq)
             loss_param = criterion_params(params_pred.float(), y_params_scaled.float())
             
             loss = loss_seq + 0.1 * loss_param # Weighting factor
                 
-            # AMP Backward Pass
-            scaler.scale(loss).backward()
+            # Backward Pass (No scaler needed for bfloat16!)
+            loss.backward()
             
-            # Unscale gradients and clip them to prevent exploding gradients (NaNs)
-            scaler.unscale_(optimizer)
+            # Clip gradients to prevent exploding gradients (NaNs)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             
             total_loss += loss.item()
             total_seq_loss += loss_seq.item()
