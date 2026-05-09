@@ -55,7 +55,14 @@ def generate_rtn(seq_length=2048, dt=1e-9,
 # ─────────────────────────────────────────────────────────────────────────────
 # 2.  Classical denoisers
 # ─────────────────────────────────────────────────────────────────────────────
-def thresh(sig, thr=0.5):
+def thresh(sig):
+    # Dynamic threshold (Wang 2016): Midpoint of k-means clusters
+    from sklearn.cluster import KMeans
+    # Reshape signal for clustering
+    sig_reshaped = sig.reshape(-1, 1)
+    kmeans = KMeans(n_clusters=2, n_init=10, random_state=42).fit(sig_reshaped)
+    centers = kmeans.cluster_centers_.flatten()
+    thr = np.mean(centers)
     return (sig > thr).astype(np.float32)
 
 def moving_average(sig, w=25):
@@ -96,13 +103,22 @@ def hmm_viterbi(sig, n_iter=60):
 # ─────────────────────────────────────────────────────────────────────────────
 # 3.  AI Transformer inference
 # ─────────────────────────────────────────────────────────────────────────────
-def load_model(checkpoint_path, seq_length, device):
+def load_model(checkpoint_path, seq_length, device, model_type='transformer'):
     import sys, pathlib
     sys.path.insert(0, str(pathlib.Path(__file__).parent))
-    from src.models.transformer import RTNDualHeadTransformer
-    model = RTNDualHeadTransformer(
-        seq_length=seq_length, in_channels=1,
-        d_model=64, n_heads=4, num_layers=3).to(device)
+    
+    if model_type == 'transformer':
+        from src.models.transformer import RTNDualHeadTransformer
+        model = RTNDualHeadTransformer(
+            seq_length=seq_length, in_channels=1,
+            d_model=128, n_heads=8, num_layers=4, extract_window=64).to(device)
+    elif model_type == 'bilstm':
+        from src.models.baselines import BiLSTM_RTN
+        model = BiLSTM_RTN(in_channels=1, hidden_size=128, num_layers=2).to(device)
+    elif model_type == 'tcn':
+        from src.models.baselines import DilatedTCN_RTN
+        model = DilatedTCN_RTN(in_channels=1, num_channels=[32, 64, 64, 128], kernel_size=3).to(device)
+
     ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
     sd = {k.replace('_orig_mod.', ''): v for k, v in ck['model_state_dict'].items()}
     model.load_state_dict(sd)
@@ -182,6 +198,8 @@ STYLE = {
     'med':    dict(color='#9B59B6', alpha=0.90, lw=1.4,  label='Median Filter',         zorder=2),
     'wav':    dict(color='#3498DB', alpha=0.90, lw=1.4,  label='Wavelet (db4)',         zorder=2),
     'hmm':    dict(color='#E67E22', alpha=0.90, lw=1.6,  label='HMM + Viterbi',        zorder=3),
+    'lstm':   dict(color='#8E44AD', alpha=0.95, lw=1.8,  label='BiLSTM (Oh 2020)',      zorder=4),
+    'tcn':    dict(color='#16A085', alpha=0.95, lw=1.8,  label='Dilated TCN (Yang 2020)',zorder=4),
     'ai':     dict(color='#E74C3C', alpha=1.00, lw=2.2,  label='AI Transformer (Ours)',  zorder=6),
 }
 
@@ -207,8 +225,25 @@ def _ax_style(ax, title):
 def make_figure(clean, noisy, results, metrics_dict, tau_c, tau_e,
                 prob1_ai, pred_params, seq_length, save_path):
     t = np.arange(seq_length)
-    fig = plt.figure(figsize=(20, 18), facecolor=PALETTE['background'])
-    gs  = gridspec.GridSpec(4, 3, figure=fig, hspace=0.55, wspace=0.32)
+    # ── Row 1: Method-by-method comparison (zoom window) ────────────────────
+    zoom_s, zoom_e = seq_length//4, seq_length//4 + 512
+    z = slice(zoom_s, zoom_e)
+    tz = t[z]
+
+    methods = [('ma','Moving Average'), ('sg','Savitzky-Golay'),
+               ('wav','Wavelet (db4)'), ('hmm','HMM+Viterbi'),
+               ('med','Median Filter')]
+    if 'lstm' in results: methods.append(('lstm', 'BiLSTM'))
+    if 'tcn' in results: methods.append(('tcn', 'Dilated TCN'))
+    methods.append(('ai','AI Transformer'))
+
+    # Determine layout dynamically based on number of methods
+    cols = 3
+    method_rows = (len(methods) + cols - 1) // cols
+    total_rows = 1 + method_rows + 1
+
+    fig = plt.figure(figsize=(20, 4.5 * total_rows), facecolor=PALETTE['background'])
+    gs  = gridspec.GridSpec(total_rows, 3, figure=fig, hspace=0.55, wspace=0.32)
 
     # ── Row 0: Full signal overview ──────────────────────────────────────────
     ax0 = fig.add_subplot(gs[0, :])
@@ -222,20 +257,15 @@ def make_figure(clean, noisy, results, metrics_dict, tau_c, tau_e,
                labelcolor=PALETTE['text'], framealpha=0.8)
     _ax_style(ax0, "Signal Overview  [Bottom: Noisy  |  Middle: True RTN  |  Top: AI Output]")
 
-    # ── Row 1: Method-by-method comparison (zoom window) ────────────────────
-    zoom_s, zoom_e = seq_length//4, seq_length//4 + 512
-    z = slice(zoom_s, zoom_e)
-    tz = t[z]
-
-    methods = [('ma','Moving Average'), ('sg','Savitzky-Golay'),
-               ('wav','Wavelet (db4)'), ('hmm','HMM+Viterbi'),
-               ('med','Median Filter'),  ('ai','AI Transformer')]
-    axes_r1 = [fig.add_subplot(gs[1, col]) for col in range(3)]
-    axes_r2 = [fig.add_subplot(gs[2, col]) for col in range(3)]
-    row1_axes = axes_r1 + axes_r2
+    # We will use axes in row 1 up to method_rows
+    method_axes = []
+    for r in range(method_rows):
+        for c in range(cols):
+            if len(method_axes) < len(methods):
+                method_axes.append(fig.add_subplot(gs[r+1, c]))
 
     for idx, (key, title) in enumerate(methods):
-        ax = row1_axes[idx]
+        ax = method_axes[idx]
         ax.plot(tz, noisy[z], **STYLE['noisy'])
         ax.plot(tz, clean[z], **STYLE['clean'])
         ax.plot(tz, results[key][z], **STYLE[key])
@@ -246,8 +276,9 @@ def make_figure(clean, noisy, results, metrics_dict, tau_c, tau_e,
         ax.set_ylim(-0.3, 1.5)
         _ax_style(ax, f"{title}\n{info}")
 
-    # ── Row 3 left: AI soft probability ──────────────────────────────────────
-    ax_prob = fig.add_subplot(gs[3, 0])
+    # ── Bottom row left: AI soft probability ─────────────────────────────────
+    bottom_row = 1 + method_rows
+    ax_prob = fig.add_subplot(gs[bottom_row, 0])
     ax_prob.fill_between(t, prob1_ai, color='#58A6FF', alpha=0.25)
     ax_prob.plot(t, prob1_ai, color='#58A6FF', lw=1.2, label='P(state=1)')
     ax_prob.plot(t, clean * 0.9, color='#00CC44', lw=1.5, alpha=0.7, label='True state (scaled)')
@@ -257,11 +288,12 @@ def make_figure(clean, noisy, results, metrics_dict, tau_c, tau_e,
     ax_prob.legend(fontsize=7.5, facecolor=PALETTE['panel'], labelcolor=PALETTE['text'])
     _ax_style(ax_prob, "AI Posterior Probability P(state=1) + Schmitt Hysteresis")
 
-    # ── Row 3 middle: Metrics bar chart ──────────────────────────────────────
-    ax_met = fig.add_subplot(gs[3, 1])
+    # ── Bottom row middle: Metrics bar chart ─────────────────────────────────
+    ax_met = fig.add_subplot(gs[bottom_row, 1])
     method_names = list(metrics_dict.keys())
     accs  = [metrics_dict[m]['Accuracy']*100 for m in method_names]
-    colors = ['#FF6B6B','#FFB347','#3498DB','#E67E22','#9B59B6','#E74C3C']
+    # dynamically get color from STYLE
+    colors = [STYLE[m]['color'] for m in method_names]
     bars = ax_met.barh(method_names, accs, color=colors, edgecolor='none', height=0.55)
     ax_met.set_xlim(40, 102)
     for b, v in zip(bars, accs):
@@ -272,12 +304,12 @@ def make_figure(clean, noisy, results, metrics_dict, tau_c, tau_e,
     ax_met.tick_params(colors=PALETTE['text'])
     _ax_style(ax_met, "State Accuracy — All Methods")
 
-    # ── Row 3 right: Parameter estimation ────────────────────────────────────
-    ax_par = fig.add_subplot(gs[3, 2])
+    # ── Bottom row right: Parameter estimation ───────────────────────────────
+    ax_par = fig.add_subplot(gs[bottom_row, 2])
     labels = [r'$\tau_c$ (Capture)', r'$\tau_e$ (Emission)']
     true_v = np.array([tau_c, tau_e]) * 1e6   # µs
-    # pred_params is scaled by 1e7 internally, bring to µs
-    pred_v = np.array(pred_params) / 10.0     # 1e7 scale → µs
+    # pred_params is log10(seconds), convert to µs
+    pred_v = (10.0 ** np.array(pred_params)) * 1e6
 
     x_pos = np.array([0.0, 1.0])
     w = 0.3
@@ -309,6 +341,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint', type=str,
                         default='checkpoints/rtn_transformer_epoch_50.pt')
+    parser.add_argument('--checkpoint_bilstm', type=str, default=None,
+                        help='Path to BiLSTM checkpoint')
+    parser.add_argument('--checkpoint_tcn', type=str, default=None,
+                        help='Path to Dilated TCN checkpoint')
     parser.add_argument('--seq_length',  type=int,   default=2048)
     parser.add_argument('--noise_std',   type=float, default=0.12)
     parser.add_argument('--tau_c',       type=float, default=3e-6)
@@ -323,14 +359,28 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
-    # Load model once
-    print("Loading AI model...")
+    # Load AI models
+    print("Loading AI models...")
+    models = {'transformer': None, 'bilstm': None, 'tcn': None}
     try:
-        model = load_model(args.checkpoint, args.seq_length, device)
-        print("[✓] Model loaded")
+        models['transformer'] = load_model(args.checkpoint, args.seq_length, device, 'transformer')
+        print("[✓] Transformer loaded")
     except Exception as e:
-        print(f"[!] Could not load model: {e}")
-        model = None
+        print(f"[!] Could not load Transformer: {e}")
+
+    if args.checkpoint_bilstm:
+        try:
+            models['bilstm'] = load_model(args.checkpoint_bilstm, args.seq_length, device, 'bilstm')
+            print("[✓] BiLSTM loaded")
+        except Exception as e:
+            print(f"[!] Could not load BiLSTM: {e}")
+
+    if args.checkpoint_tcn:
+        try:
+            models['tcn'] = load_model(args.checkpoint_tcn, args.seq_length, device, 'tcn')
+            print("[✓] Dilated TCN loaded")
+        except Exception as e:
+            print(f"[!] Could not load Dilated TCN: {e}")
 
     seeds = [args.seed + i*7 for i in range(args.num_samples)]
 
@@ -355,10 +405,24 @@ def main():
         }
 
         prob1_ai, pred_params = np.zeros(args.seq_length), np.zeros(2)
-        if model is not None:
+        
+        # BiLSTM baseline
+        if models['bilstm'] is not None:
+            print("Running BiLSTM...")
+            lstm_hard, _, _ = ai_denoise(models['bilstm'], noisy, args.seq_length, device)
+            results['lstm'] = lstm_hard
+
+        # TCN baseline
+        if models['tcn'] is not None:
+            print("Running Dilated TCN...")
+            tcn_hard, _, _ = ai_denoise(models['tcn'], noisy, args.seq_length, device)
+            results['tcn'] = tcn_hard
+
+        # Transformer
+        if models['transformer'] is not None:
             print("Running AI transformer...")
             ai_hard, prob1_ai, pred_params = ai_denoise(
-                model, noisy, args.seq_length, device)
+                models['transformer'], noisy, args.seq_length, device)
             results['ai'] = ai_hard
         else:
             results['ai'] = thresh(noisy)

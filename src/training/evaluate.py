@@ -45,6 +45,20 @@ def decode_with_hysteresis(prob1, hi=0.65, lo=0.35):
     return out
 
 
+def expected_calibration_error(y_true, y_prob, n_bins=10):
+    """ECE: Expected Calibration Error (LLM-TSFD metric)"""
+    bins = np.linspace(0., 1., n_bins + 1)
+    binids = np.clip(np.digitize(y_prob, bins) - 1, 0, n_bins - 1)
+    bin_sums = np.bincount(binids, weights=y_prob, minlength=n_bins)
+    bin_true = np.bincount(binids, weights=y_true, minlength=n_bins)
+    bin_total = np.bincount(binids, minlength=n_bins)
+    nonzero = bin_total > 0
+    prob_true = bin_true[nonzero] / bin_total[nonzero]
+    prob_pred = bin_sums[nonzero] / bin_total[nonzero]
+    ece = np.sum(np.abs(prob_true - prob_pred) * (bin_total[nonzero] / len(y_true)))
+    return ece, prob_pred, prob_true, bin_total[nonzero]
+
+
 def evaluate(checkpoint_path, save_dir, num_samples=5, seq_length=1024):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[*] Evaluating on: {device}")
@@ -85,15 +99,16 @@ def evaluate(checkpoint_path, save_dir, num_samples=5, seq_length=1024):
             true_tau  = y_params.squeeze().numpy()              # raw seconds
 
             acc = np.mean(pred_hard == true_seq) * 100.0
+            ece_val, prob_pred, prob_true, bin_counts = expected_calibration_error(true_seq, prob1)
             err_c = abs(pred_tau[0] - true_tau[0]) / true_tau[0] * 100
             err_e = abs(pred_tau[1] - true_tau[1]) / true_tau[1] * 100
-            print(f"  Sample {i+1}: Acc={acc:.1f}%  "
+            print(f"  Sample {i+1}: Acc={acc:.1f}%  ECE={ece_val:.3f}  "
                   f"τ_c err={err_c:.1f}%  τ_e err={err_e:.1f}%")
 
             t = np.arange(seq_length)
 
-            fig = plt.figure(figsize=(15, 12), facecolor=DARK['bg'])
-            gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.5, wspace=0.32)
+            fig = plt.figure(figsize=(15, 16), facecolor=DARK['bg'])
+            gs  = gridspec.GridSpec(4, 2, figure=fig, hspace=0.5, wspace=0.32)
 
             # ── Plot 1: raw overlay ───────────────────────────────────────────
             ax1 = fig.add_subplot(gs[0, :])
@@ -106,7 +121,7 @@ def evaluate(checkpoint_path, save_dir, num_samples=5, seq_length=1024):
             ax1.legend(fontsize=8, facecolor=DARK['panel'],
                        labelcolor=DARK['text'], loc='upper right')
             ax1.set_xlim(0, seq_length)
-            _ax(ax1, f"Signal Overview  |  State Accuracy: {acc:.1f}%")
+            _ax(ax1, f"Signal Overview  |  State Accuracy: {acc:.1f}%  |  ECE: {ece_val:.3f}")
 
             # ── Plot 2: probability ───────────────────────────────────────────
             ax2 = fig.add_subplot(gs[1, 0])
@@ -157,7 +172,24 @@ def evaluate(checkpoint_path, save_dir, num_samples=5, seq_length=1024):
             errs = f"τ_c err={err_c:.1f}%  τ_e err={err_e:.1f}%"
             _ax(ax5, f"Parameter Regression  [{errs}]")
 
-            for ax in [ax1, ax2, ax3, ax4, ax5]:
+            # ── Plot 6: Time-Lag Plot (TLP) ───────────────────────────────────
+            ax6 = fig.add_subplot(gs[3, 0])
+            lag = 1
+            ax6.scatter(noisy_sig[:-lag], noisy_sig[lag:], s=2, alpha=0.15, color=DARK['blue'])
+            _ax(ax6, f"Time-Lag Plot (TLP) lag={lag} smp")
+            ax6.set_xlabel("I(t)")
+            ax6.set_ylabel("I(t + lag)")
+
+            # ── Plot 7: ECE Reliability Diagram ───────────────────────────────
+            ax7 = fig.add_subplot(gs[3, 1])
+            ax7.plot([0, 1], [0, 1], ls='--', color=DARK['grid'])
+            ax7.plot(prob_pred, prob_true, marker='o', color=DARK['orange'], lw=1.5, label='Calibration Curve')
+            ax7.set_xlabel("Mean Predicted Probability")
+            ax7.set_ylabel("Fraction of Positives")
+            ax7.legend(fontsize=8, facecolor=DARK['panel'], labelcolor=DARK['text'])
+            _ax(ax7, f"Reliability Diagram (ECE = {ece_val:.3f})")
+
+            for ax in [ax1, ax2, ax3, ax4, ax5, ax6, ax7]:
                 ax.yaxis.label.set_color(DARK['text'])
                 ax.xaxis.label.set_color(DARK['text'])
 
