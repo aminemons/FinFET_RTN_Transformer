@@ -47,7 +47,7 @@ class RTNDualHeadTransformer(nn.Module):
         d_model: int      = 128,
         n_heads: int      = 8,
         num_layers: int   = 4,
-        extract_window: int = 16,
+        extract_window: int = 64,   # Akbar 2021: window 64-128 optimal for RTN features
         dropout: float    = 0.1,
     ):
         super().__init__()
