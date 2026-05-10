@@ -10,9 +10,9 @@ def export_to_onnx(checkpoint_path, output_path, seq_length=1024):
     model = RTNDualHeadTransformer(
         seq_length=seq_length,
         in_channels=1,
-        d_model=64,
-        n_heads=4,
-        num_layers=3
+        d_model=128,
+        n_heads=8,
+        num_layers=4
     ).to(device)
     
     # 2. Load Weights (Handle compiled models prefix '_orig_mod.')
