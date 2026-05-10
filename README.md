@@ -1,6 +1,6 @@
 # Physics-Grounded AI for Random Telegraph Noise (RTN) Denoising and Parameter Extraction in Nanoscale FinFETs
 
-**Author:** Amine Allab, PhD Student in Micro and Nanoelectronics
+**Author:** Amine Allab,  Student in Micro and Nanoelectronics
 
 ---
 
